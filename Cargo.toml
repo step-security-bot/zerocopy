@@ -26,6 +26,7 @@ pinned-nightly = "nightly-2022-10-17"
 
 [features]
 alloc = []
+ptr-metadata = []
 simd = []
 simd-nightly = ["simd"]
 # This feature depends on all other features that work on the stable compiler.

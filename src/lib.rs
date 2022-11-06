@@ -120,6 +120,7 @@
 ))]
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(feature = "simd-nightly", feature(stdsimd))]
+#![cfg_attr(feature = "ptr-metadata", feature(ptr_metadata, layout_for_ptr, const_size_of_val_raw))]
 
 pub mod byteorder;
 #[doc(hidden)]
@@ -151,6 +152,9 @@ use {
     alloc::vec::Vec,
     core::{alloc::Layout, ptr::NonNull},
 };
+
+#[cfg(feature = "ptr-metadata")]
+use core::ptr::Pointee;
 
 // This is a hack to allow derives of `FromBytes`, `AsBytes`, and `Unaligned` to
 // work in this crate. They assume that zerocopy is linked as an extern crate,
@@ -2690,6 +2694,60 @@ mod alloc_support {
 #[doc(inline)]
 pub use alloc_support::*;
 
+/// The type of [`Pointee::Metadata`] for types which can be constructed by this
+/// crate.
+///
+/// This is implemented for `()` (the metadata used by [`Sized`] types) and
+/// `usize` (the metadata used by unsized types whose last field is a slice
+/// type).
+#[cfg(feature = "ptr-metadata")]
+pub unsafe trait PtrMetadata {
+    /// The value passed to [`core::ptr::from_raw_parts_mut`] in order to
+    /// construct a pointer to the minimum-sized instance of `Self`.
+    ///
+    /// See [`prefix_size_of`].
+    #[doc(hidden)]
+    const ZERO: Self;
+}
+
+#[cfg(feature = "ptr-metadata")]
+unsafe impl PtrMetadata for () {
+    const ZERO: () = ();
+}
+
+#[cfg(feature = "ptr-metadata")]
+unsafe impl PtrMetadata for usize {
+    const ZERO: usize = 0;
+}
+
+/// Gets the size of `T` or of the fixed-sized prefix if `T` is a
+/// dynamically-sized type.
+#[cfg(feature = "ptr-metadata")]
+const fn prefix_size_of<T: ?Sized>() -> usize
+where
+    <T as Pointee>::Metadata: PtrMetadata,
+{
+    let smallest_ptr =
+        ptr::from_raw_parts_mut::<T>(ptr::null_mut(), <T as Pointee>::Metadata::ZERO);
+    // SAFETY: Since `T::Metadata: Metadata`, we know that `T` is either a sized
+    // type (with `T::Metadata = ()`) or an unsized type whose tail is a slice
+    // (with `T::Metadata = usize`). Per the `size_of_val_raw` docs, if `T` is
+    // sized:
+    //
+    //   [T]his function is always safe to call.
+    //
+    // ...and if `T` is unsized and `T`'s unsized tail is a slice:
+    //
+    //   [T]he length of the slice tail must be an initialized integer, and the
+    //   size of the entire value (dynamic tail length + statically sized
+    //   prefix) must fit in isize.
+    //
+    // We have initialized the tail length to 0.
+    //
+    // TODO: Can the static prefix have a size which overflows isize?
+    unsafe { mem::size_of_val_raw(smallest_ptr) }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unreadable_literal)]
@@ -3765,5 +3823,34 @@ mod tests {
         assert_impls!([NotZerocopy; 0]: !FromBytes, !AsBytes, !Unaligned);
         assert_impls!([u8; 1]: FromBytes, AsBytes, Unaligned);
         assert_impls!([NotZerocopy; 1]: !FromBytes, !AsBytes, !Unaligned);
+    }
+
+    #[test]
+    #[cfg(feature = "ptr-metadata")]
+    fn test_prefix_size_of() {
+        macro_rules! test {
+            (($($fields:ty),*), $size:expr) => {{
+                #[repr(C)]
+                struct Foo($($fields),*);
+                assert_eq!(prefix_size_of::<Foo>(), $size);
+            }};
+        }
+
+        assert_eq!(prefix_size_of::<()>(), 0);
+        test!((u8), 1);
+        test!((u8, u8), 2);
+        // Since `AU64`'s alignment requirement is 8, 7 bytes of padding are
+        // added after the `u8` field.
+        test!((u8, AU64), 16);
+
+        assert_eq!(prefix_size_of::<[u8]>(), 0);
+        test!(([u8]), 0);
+        test!((u8, [u8]), 1);
+        test!((u32, [u8]), 4);
+        test!((u32, [u32]), 4);
+        // Since `[AU64]`'s alignment requirement is 8, 4 bytes of padding are
+        // added after the `u32` field.
+        test!((u32, [AU64]), 8);
+        test!((u32, u32, [AU64]), 8);
     }
 }
