@@ -29,7 +29,7 @@ jobs:
         # versions.
         toolchain: [ "msrv", "stable", "nightly" ]
         target: [ "i686-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "arm-unknown-linux-gnueabi", "aarch64-unknown-linux-gnu", "powerpc-unknown-linux-gnu", "powerpc64-unknown-linux-gnu", "wasm32-wasi" ]
-        features: [ "--no-default-features", "" , "--features __internal_use_only_features_that_work_on_stable", "--all-features" ]
+        features: [ "--no-default-features", "", "--features __internal_use_only_features_that_work_on_stable", "--all-features" ]
         crate: [ "zerocopy", "zerocopy-derive" ]
         exclude:
           # Exclude any combination which uses a non-nightly toolchain but
@@ -146,7 +146,9 @@ jobs:
       if: ${{ contains(matrix.target, 'i686') }}
 
     - name: Run tests
-      run: cargo +${{ env.ZC_TOOLCHAIN }} test --package ${{ matrix.crate }} --target ${{ matrix.target }} ${{ matrix.features }} --verbose
+      # Note: We explicitly pass `--doc` and `--features derive` here.
+      # TODO: Explain why we do this.
+      run: cargo +${{ env.ZC_TOOLCHAIN }} test --doc ${{ matrix.crate == 'zerocopy' && '--features derive' || '' }} --package ${{ matrix.crate }} --target ${{ matrix.target }} ${{ matrix.features }} --verbose
       # Only run tests when targetting x86 (32- or 64-bit) - we're executing on
       # x86_64, so we can't run tests for any non-x86 target.
       #
@@ -163,6 +165,13 @@ jobs:
       #
       # TODO(#22): Re-enable testing on wasm32-wasi once it works.
       if: ${{ matrix.toolchain == 'nightly' && matrix.target != 'wasm32-wasi' }}
+
+    # # TODO: Comments explaining why we do this
+    # - name: Run doc tests
+    #   run: cargo +${{ env.ZC_TOOLCHAIN }} test --doc --package ${{ matrix.crate }} --target ${{ matrix.target }} ${{ matrix.features }} --verbose
+    #   # TODO: Is there a way to make this more fail-safe so that this step will
+    #   # run even if we remove `--all-features` from the matrix?
+    #   if: ${{ matrix.features == '--all-features' }}
 
     - name: Clippy check
       run: cargo +${{ env.ZC_TOOLCHAIN }} clippy --package ${{ matrix.crate }} --target ${{ matrix.target }} ${{ matrix.features }} --tests --verbose
@@ -187,6 +196,7 @@ jobs:
           cargo fmt --check -p zerocopy
           cargo fmt --check -p zerocopy-derive
           rustfmt --check tests/ui-nightly/*.rs
+          rustfmt --check tests/ui-nightly/*/*.rs
           rustfmt --check zerocopy-derive/tests/ui-nightly/*.rs
 
   check_readme:
@@ -252,8 +262,11 @@ jobs:
           ver_zerocopy=$(version zerocopy)
           ver_zerocopy_derive=$(version zerocopy-derive)
 
+          # The `.kind == null` filter ensures that, if there is also a
+          # dev-dependency for zerocopy-derive (which there is as of this
+          # writing), only the non-dev dependency is selected.
           zerocopy_derive_dep_ver=$(cargo metadata --format-version 1 \
-            | jq -r ".packages[] | select(.name == \"zerocopy\").dependencies[] | select(.name == \"zerocopy-derive\").req")
+            | jq -r ".packages[] | select(.name == \"zerocopy\").dependencies[] | select((.name == \"zerocopy-derive\") and .kind == null).req")
 
           if [[ "$ver_zerocopy" == "$ver_zerocopy_derive" ]]; then
             echo "Same crate version ($ver_zerocopy) found for zerocopy and zerocopy-derive." | tee -a $GITHUB_STEP_SUMMARY
