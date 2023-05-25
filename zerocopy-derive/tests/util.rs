@@ -4,9 +4,6 @@
 
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-/// A type that doesn't implement any zerocopy traits.
-pub struct NotZerocopy(());
-
 /// A `u16` with alignment 2.
 ///
 /// Though `u16` has alignment 2 on some platforms, it's not guaranteed. By
@@ -14,3 +11,7 @@ pub struct NotZerocopy(());
 #[derive(FromZeroes, FromBytes, AsBytes, Copy, Clone)]
 #[repr(C, align(2))]
 pub struct AU16(u16);
+
+/// A type that doesn't implement any zerocopy traits.
+#[repr(transparent)]
+pub struct NotZerocopy(AU16);
